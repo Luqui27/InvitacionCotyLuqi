@@ -10,7 +10,7 @@ Si no existe `DATABASE_URL`, la API local usa SQLite en `data/invitacion.sqlite`
 
 ## Deploy: Vercel + Render + Supabase
 
-El frontend sigue en Vercel. Render ejecuta la API Node y Supabase conserva las confirmaciones en PostgreSQL. El archivo `api/[...path].js` hace de proxy para las rutas `/api/*`; así el navegador usa el mismo dominio de Vercel y la sesión del panel no depende de cookies de terceros.
+El frontend sigue en Vercel. Render ejecuta la API Node y Supabase conserva las confirmaciones en PostgreSQL. El `vercel.json` reescribe las rutas `/api/*` hacia Render sin cambiar el dominio visible para el navegador, así la sesión del panel sigue siendo first-party.
 
 ### 1. Supabase
 
@@ -36,9 +36,7 @@ Render entrega una URL del estilo `https://tu-api.onrender.com`.
 
 ### 3. Vercel
 
-En **Project Settings → Environment Variables**, agregá `RENDER_API_URL` con la URL de Render, sin una barra al final, por ejemplo `https://tu-api.onrender.com`. No uses el prefijo `VITE_`: la llamada a Render se hace desde el proxy de Vercel.
-
-Volvé a desplegar Vercel. Las llamadas existentes a `/api/...` se enviarán a Render automáticamente.
+Las rutas de API se envían a la URL pública del servicio Render desde `vercel.json`. Las rutas `/admin` y `/confirmar` se reescriben a `index.html` para que Vite cargue la SPA cuando se abren directamente.
 
 ### Datos y sesiones
 
