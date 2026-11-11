@@ -2,6 +2,7 @@ import process from "node:process";
 
 const blockedHeaders = [
   "connection",
+  "content-encoding",
   "content-length",
   "host",
   "keep-alive",
@@ -24,14 +25,23 @@ export default {
     const targetUrl = new URL(`${incomingUrl.pathname}${incomingUrl.search}`, backendUrl);
     const headers = new Headers(request.headers);
     for (const header of blockedHeaders) headers.delete(header);
+    headers.delete("accept-encoding");
 
     try {
-      return await fetch(targetUrl, {
+      const upstreamResponse = await fetch(targetUrl, {
         method: request.method,
         headers,
         body: request.method === "GET" || request.method === "HEAD" ? undefined : request.body,
         redirect: "manual",
         ...(request.method === "GET" || request.method === "HEAD" ? {} : { duplex: "half" }),
+      });
+      const responseHeaders = new Headers(upstreamResponse.headers);
+      for (const header of blockedHeaders) responseHeaders.delete(header);
+
+      return new Response(upstreamResponse.body, {
+        status: upstreamResponse.status,
+        statusText: upstreamResponse.statusText,
+        headers: responseHeaders,
       });
     } catch (error) {
       console.error("No se pudo conectar con la API de Render:", error);
