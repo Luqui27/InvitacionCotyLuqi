@@ -1,5 +1,15 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import "./App.css";
+import AdminPage from "./AdminPage.jsx";
+
+function BotanicalSprig({ className = "", src = "/florals/botanical-arrangement.png?v=3" }) {
+  return (
+    <div className={`botanical-sprig ${className}`} aria-hidden="true">
+      <img src={src} alt="" />
+    </div>
+  );
+}
 
 function LeafSprig({ className = "" }) {
   return (
@@ -20,6 +30,55 @@ function EventIcon({ type }) {
   return <svg className="event-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[type]}</svg>;
 }
 
+function MapChooser() {
+  const [isOpen, setIsOpen] = useState(false);
+  const triggerRef = useRef(null);
+  const closeButtonRef = useRef(null);
+
+  useEffect(() => {
+    if (!isOpen) return undefined;
+    closeButtonRef.current?.focus();
+    const closeOnEscape = (event) => {
+      if (event.key === "Escape") setIsOpen(false);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("keydown", closeOnEscape);
+      triggerRef.current?.focus();
+    };
+  }, [isOpen]);
+
+  return (
+    <div className="map-chooser">
+      <button
+        ref={triggerRef}
+        className="map-button"
+        type="button"
+        aria-haspopup="dialog"
+        aria-expanded={isOpen}
+        onClick={() => setIsOpen((open) => !open)}
+      >
+        ELEGIR APP DE MAPAS
+      </button>
+      {isOpen && createPortal(
+        <div className="map-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setIsOpen(false); }}>
+          <section className="map-modal" role="dialog" aria-modal="true" aria-labelledby="map-modal-title">
+            <button ref={closeButtonRef} className="map-modal-close" type="button" aria-label="Cerrar opciones de mapa" onClick={() => setIsOpen(false)}>×</button>
+            <p className="small-title">CÓMO LLEGAR</p>
+            <h2 id="map-modal-title">Elegí tu app de mapas</h2>
+            <p className="map-modal-location">La Zoraida Eventos · Tafí Viejo</p>
+            <div className="map-modal-options">
+              <a href="https://maps.app.goo.gl/Va5xpdAXktsaQyV78" target="_blank" rel="noopener noreferrer" onClick={() => setIsOpen(false)}>Google Maps</a>
+              <a href="https://maps.apple.com/?q=La%20Zoraida%20Eventos&ll=-26.7228137,-65.2693801" target="_blank" rel="noopener noreferrer" onClick={() => setIsOpen(false)}>Apple Maps</a>
+            </div>
+          </section>
+        </div>,
+        document.body,
+      )}
+    </div>
+  );
+}
+
 function navigateToSection(event, sectionId) {
   event.preventDefault();
   const section = document.getElementById(sectionId);
@@ -34,6 +93,8 @@ function navigateToSection(event, sectionId) {
 
 function App() {
   const weddingDate = new Date("2027-04-17T20:00:00");
+  const [showRsvpPage, setShowRsvpPage] = useState(() => window.location.pathname === "/confirmar");
+  const [showAdminPage, setShowAdminPage] = useState(() => window.location.pathname === "/admin");
 
   const [timeLeft, setTimeLeft] = useState({
     days: 0,
@@ -43,8 +104,28 @@ function App() {
   });
 
   const [copied, setCopied] = useState(false);
+  const [copyStatus, setCopyStatus] = useState(null);
   const [visibleSections, setVisibleSections] = useState({});
   const [easterEggDismissed, setEasterEggDismissed] = useState(false);
+  const [attendance, setAttendance] = useState("");
+  const [hasCompanion, setHasCompanion] = useState("no");
+  const [hasSecondCompanion, setHasSecondCompanion] = useState("no");
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submissionStatus, setSubmissionStatus] = useState({ type: "", message: "" });
+
+  useEffect(() => {
+    const syncRoute = () => {
+      const path = window.location.pathname;
+      setShowRsvpPage(path === "/confirmar");
+      setShowAdminPage(path === "/admin");
+      if (path === "/" && window.location.hash) {
+        const sectionId = window.location.hash.slice(1);
+        window.setTimeout(() => document.getElementById(sectionId)?.scrollIntoView({ block: "start" }), 0);
+      }
+    };
+    window.addEventListener("popstate", syncRoute);
+    return () => window.removeEventListener("popstate", syncRoute);
+  }, []);
 
   useEffect(() => {
     const updateCountdown = () => {
@@ -112,14 +193,229 @@ function App() {
 }, []);
 
   const copyAlias = async () => {
-    await navigator.clipboard.writeText("bodaluqi.coty");
-
-    setCopied(true);
-
-    setTimeout(() => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText("BODA.LC");
+      } else {
+        const temporaryField = document.createElement("textarea");
+        temporaryField.value = "BODA.LC";
+        temporaryField.style.position = "fixed";
+        temporaryField.style.opacity = "0";
+        document.body.appendChild(temporaryField);
+        temporaryField.select();
+        const didCopy = document.execCommand("copy");
+        temporaryField.remove();
+        if (!didCopy) throw new Error("Clipboard unavailable");
+      }
+      setCopied(true);
+      setCopyStatus({ type: "success", message: "¡Alias copiado con éxito!" });
+    } catch {
       setCopied(false);
-    }, 2500);
+      setCopyStatus({ type: "error", message: "No se pudo copiar el alias. Mantené presionado para copiarlo." });
+    }
+
+    window.setTimeout(() => {
+      setCopied(false);
+      setCopyStatus(null);
+    }, 3000);
   };
+
+  const openRsvpPage = (event) => {
+    event.preventDefault();
+    window.history.pushState(null, "", "/confirmar");
+    setShowRsvpPage(true);
+    window.scrollTo(0, 0);
+  };
+
+  const returnToInvitation = (event) => {
+    event.preventDefault();
+    window.history.pushState(null, "", "/#inicio");
+    setShowRsvpPage(false);
+    setShowAdminPage(false);
+    window.setTimeout(() => document.getElementById("inicio")?.scrollIntoView({ block: "start" }), 0);
+  };
+
+  const submitRsvp = async (event) => {
+    event.preventDefault();
+    const form = event.currentTarget;
+    const formData = new FormData(form);
+    const attending = formData.get("attendance") === "yes";
+    const companions = [];
+
+    if (attending && hasCompanion === "yes") {
+      companions.push({
+        firstName: formData.get("companionName"),
+        lastName: formData.get("companionSurname"),
+        dietaryNotes: formData.get("companionComment"),
+      });
+    }
+    if (attending && hasCompanion === "yes" && hasSecondCompanion === "yes") {
+      companions.push({
+        firstName: formData.get("secondCompanionName"),
+        lastName: formData.get("secondCompanionSurname"),
+        dietaryNotes: formData.get("secondCompanionComment"),
+      });
+    }
+
+    setIsSubmitting(true);
+    setSubmissionStatus({ type: "", message: "" });
+    try {
+      const response = await fetch("/api/rsvps", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          guest: {
+            firstName: formData.get("guestName"),
+            lastName: formData.get("guestSurname"),
+            attending,
+            dietaryNotes: attending ? formData.get("guestDietaryComment") : "",
+          },
+          companions,
+        }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error ?? "No se pudo guardar la confirmación.");
+
+      form.reset();
+      setAttendance("");
+      setHasCompanion("no");
+      setHasSecondCompanion("no");
+      setSubmissionStatus({ type: "success", message: "¡Gracias! Tu confirmación quedó registrada." });
+    } catch (error) {
+      setSubmissionStatus({ type: "error", message: "No se pudo enviar el formulario." });
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  const rsvpForm = (
+    <form className="rsvp-form" onSubmit={submitRsvp}>
+      <div className="rsvp-field">
+        <label htmlFor="guest-name">Tu nombre</label>
+        <input id="guest-name" name="guestName" type="text" autoComplete="given-name" placeholder="Nombre" required />
+      </div>
+
+      <div className="rsvp-field">
+        <label htmlFor="guest-surname">Tu apellido</label>
+        <input id="guest-surname" name="guestSurname" type="text" autoComplete="family-name" placeholder="Apellido" required />
+      </div>
+
+      <fieldset className="rsvp-attendance">
+        <legend>¿Vas a poder acompañarnos?</legend>
+        <label>
+          <input type="radio" name="attendance" value="yes" checked={attendance === "yes"} onChange={() => setAttendance("yes")} required />
+          Sí, ahí estaré
+        </label>
+        <label>
+          <input type="radio" name="attendance" value="no" checked={attendance === "no"} onChange={() => { setAttendance("no"); setHasCompanion("no"); setHasSecondCompanion("no"); }} />
+          No voy a poder
+        </label>
+      </fieldset>
+
+      {attendance === "yes" && (
+        <>
+          <div className="rsvp-field dietary-comment">
+            <label htmlFor="guest-dietary-comment">¿Tenés alguna alergia o necesidad alimentaria? <span>(opcional)</span></label>
+            <textarea id="guest-dietary-comment" name="guestDietaryComment" rows="3" placeholder="Contanos si hay algo que debamos tener en cuenta para la comida" />
+          </div>
+
+          <div className="rsvp-field">
+            <label htmlFor="has-companion">¿Vas a llevar acompañante?</label>
+            <select id="has-companion" name="hasCompanion" value={hasCompanion} onChange={(event) => { setHasCompanion(event.target.value); if (event.target.value === "no") setHasSecondCompanion("no"); }}>
+              <option value="no">No</option>
+              <option value="yes">Sí</option>
+            </select>
+          </div>
+
+          {hasCompanion === "yes" && (
+            <div className="companion-fields">
+              <div className="rsvp-field">
+                <label htmlFor="companion-name">Nombre del acompañante</label>
+                <input id="companion-name" name="companionName" type="text" autoComplete="off" placeholder="Nombre" required />
+              </div>
+              <div className="rsvp-field">
+                <label htmlFor="companion-surname">Apellido del acompañante</label>
+                <input id="companion-surname" name="companionSurname" type="text" autoComplete="off" placeholder="Apellido" required />
+              </div>
+              <div className="rsvp-field companion-comment">
+                <label htmlFor="companion-comment">¿Tu acompañante tiene alguna alergia o necesidad alimentaria? <span>(opcional)</span></label>
+                <textarea id="companion-comment" name="companionComment" rows="3" placeholder="Contanos si hay algo que debamos tener en cuenta para su comida" />
+              </div>
+
+            </div>
+          )}
+
+          {hasCompanion === "yes" && (
+            <div className="rsvp-field add-second-companion">
+              <label htmlFor="has-second-companion">¿Querés agregar otro acompañante?</label>
+              <select id="has-second-companion" name="hasSecondCompanion" value={hasSecondCompanion} onChange={(event) => setHasSecondCompanion(event.target.value)}>
+                <option value="no">No</option>
+                <option value="yes">Sí</option>
+              </select>
+            </div>
+          )}
+
+          {hasCompanion === "yes" && hasSecondCompanion === "yes" && (
+            <div className="companion-fields second-companion-fields">
+              <div className="rsvp-field">
+                <label htmlFor="second-companion-name">Nombre del segundo acompañante</label>
+                <input id="second-companion-name" name="secondCompanionName" type="text" autoComplete="off" placeholder="Nombre" required />
+              </div>
+              <div className="rsvp-field">
+                <label htmlFor="second-companion-surname">Apellido del segundo acompañante</label>
+                <input id="second-companion-surname" name="secondCompanionSurname" type="text" autoComplete="off" placeholder="Apellido" required />
+              </div>
+              <div className="rsvp-field companion-comment">
+                <label htmlFor="second-companion-comment">¿El segundo acompañante tiene alguna alergia o necesidad alimentaria? <span>(opcional)</span></label>
+                <textarea id="second-companion-comment" name="secondCompanionComment" rows="3" placeholder="Contanos si hay algo que debamos tener en cuenta para su comida" />
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      <button className="confirmation-button" type="submit" disabled={isSubmitting}>
+        {isSubmitting ? "ENVIANDO…" : "CONFIRMAR ASISTENCIA"}
+      </button>
+      {submissionStatus.type === "error" && (
+        <div className="rsvp-feedback error" role="alert" aria-live="assertive">
+          <h2>No se pudo enviar</h2>
+          <p>{submissionStatus.message} Intentá de nuevo en unos minutos.</p>
+          <button className="confirmation-button" type="button" onClick={() => setSubmissionStatus({ type: "", message: "" })}>
+            REINTENTAR
+          </button>
+        </div>
+      )}
+    </form>
+  );
+
+  if (showAdminPage) return <AdminPage onReturn={returnToInvitation} />;
+
+  if (showRsvpPage) {
+    return (
+      <main className="rsvp-page">
+        <div className="rsvp-page-content">
+          {submissionStatus.type === "success" ? (
+            <section className="rsvp-feedback success" role="status" aria-live="polite">
+              <p className="small-title">LUCAS &amp; COTY · 17.04.2027</p>
+              <h1>¡Gracias!</h1>
+              <p>Tu confirmación quedó registrada.</p>
+              <a className="confirmation-button rsvp-return-button" href="/#inicio" onClick={returnToInvitation}>
+                VOLVER A LA INVITACIÓN PRINCIPAL
+              </a>
+            </section>
+          ) : (
+            <>
+              <a className="rsvp-back" href="/#inicio" onClick={returnToInvitation} aria-label="Volver a la invitación">← Volver a la invitación</a>
+              <p className="small-title">LUCAS &amp; COTY · 17.04.2027</p>
+              <h1>Confirmar asistencia</h1>
+              {rsvpForm}
+            </>
+          )}
+        </div>
+      </main>
+    );
+  }
 
   return (
     <>
@@ -128,8 +424,8 @@ function App() {
       {/* PORTADA */}
 
       <section className="hero" id="inicio">
-        <LeafSprig className="sprig-left" />
-        <LeafSprig className="sprig-right" />
+          <BotanicalSprig className="sprig-left hero-floral hero-upper-left-floral" src="/florals/upper-left-featured-sprig.png?v=2" />
+          <BotanicalSprig className="sprig-right hero-floral hero-lower-right-floral" src="/florals/lower-right-fewer-leaves.png" />
 
         <nav className="site-nav" aria-label="Navegación principal">
           <a href="#inicio" aria-current="page" onClick={(event) => navigateToSection(event, "inicio")}>INICIO</a>
@@ -141,17 +437,11 @@ function App() {
         <div className="hero-content">
           <p className="subtitle">¡NOS CASAMOS!</p>
 
-          <h1>
-            Lucas <span>&</span> Coty
-          </h1>
-
-          <div className="divider">
-            <span></span>
-            <span className="heart">♥</span>
-            <span></span>
-          </div>
-
-          <p className="date">17 · 04 · 2027</p>
+            <div className="couple-mark" aria-label="Lucas y Coty, 17 de abril de 2027">
+              <h1 className="couple-monogram"><span>L</span><i aria-hidden="true"></i><span>C</span></h1>
+              <p className="couple-names"><span>LUCAS</span><span className="couple-amp">&amp;</span><span>COTY</span></p>
+              <p className="couple-date">17.04.27</p>
+            </div>
 
           <p className="message">Tenemos el placer de invitarte a compartir uno de los días más importantes de nuestras vidas.</p>
           <a className="discover-button" href="#detalles" onClick={(event) => navigateToSection(event, "detalles")} aria-label="Ir a Una nueva historia comienza">
@@ -196,20 +486,14 @@ function App() {
             <EventIcon type="map" />
             <h3>Cómo llegar</h3>
             <p>Elegí tu app de mapas</p>
-            <a href="https://maps.app.goo.gl/Va5xpdAXktsaQyV78" target="_blank" rel="noreferrer" className="map-button">VER UBICACIÓN</a>
+            <MapChooser />
           </div>
 
-          <div className="event-item event-item-four">
-            <EventIcon type="gift" />
-            <h3>Confirmar asistencia</h3>
-            <p>¡Nos encantaría<br />que seas parte!</p>
-            <a href="#confirmacion" onClick={(event) => navigateToSection(event, "confirmacion")} className="map-button">CONFIRMAR</a>
-          </div>
         </div>
 
         <section className="countdown-section" aria-label="Cuenta regresiva">
-          <LeafSprig className="countdown-sprig countdown-sprig-left" />
-          <LeafSprig className="countdown-sprig countdown-sprig-right" />
+          <BotanicalSprig className="countdown-sprig countdown-sprig-left" src="/florals/countdown-right-arrangement.png" />
+          <BotanicalSprig className="countdown-sprig countdown-sprig-right" src="/florals/countdown-right-arrangement.png" />
           <p className="small-title">FALTA POCO...</p>
           <div className="countdown">
             <div><strong>{timeLeft.days}</strong><span>DÍAS</span></div>
@@ -249,20 +533,27 @@ function App() {
           el valor de la tarjeta es de:
         </p>
 
-        <p className="ticket-price">
-          $70.000
+        <p className="ticket-price" aria-label="70.000 pesos por persona">
+          <span className="peso-sign" aria-hidden="true">S<i /></span>70.000
           <span>por persona</span>
         </p>
 
         <div className="alias-box">
           <span>ALIAS</span>
 
-          <strong>bodaluqi.coty</strong>
+          <strong>BODA.LC</strong>
+          <p className="alias-owner">Cuenta a nombre de Lucas Gonzalo D’Mayo · Naranja X</p>
 
-          <button onClick={copyAlias}>
+          <button type="button" onClick={copyAlias}>
             {copied ? "✓ ALIAS COPIADO" : "COPIAR ALIAS"}
           </button>
         </div>
+        {copyStatus && createPortal(
+          <div className={`copy-toast ${copyStatus.type}`} role="status" aria-live="polite">
+            {copyStatus.message}
+          </div>,
+          document.body,
+        )}
 
         <a className="section-jump" href="#confirmacion" onClick={(event) => navigateToSection(event, "confirmacion")} aria-label="Ir a ¿Nos acompañás?">
           <b aria-hidden="true">↓</b>
@@ -277,6 +568,8 @@ function App() {
   }`}
   id="confirmacion"
 >
+        <BotanicalSprig className="confirmation-floral" src="/florals/countdown-right-arrangement.png" />
+        <BotanicalSprig className="confirmation-floral confirmation-floral-upper-left" src="/florals/upper-left-featured-sprig.png?v=2" />
         <p className="small-title">
           CONFIRMACIÓN DE ASISTENCIA
         </p>
@@ -288,30 +581,22 @@ function App() {
           para poder organizar este día tan especial.
         </p>
 
-        <button className="confirmation-button">
-          CONFIRMAR ASISTENCIA
-        </button>
-      </section>
-
-      {/* CIERRE */}
-
-      <footer>
-        <LeafSprig className="footer-sprig footer-sprig-left" />
-        <LeafSprig className="footer-sprig footer-sprig-right" />
-        <h2>¡Te esperamos!</h2>
-
-        <p>
-          Lucas & Coty ♡
-        </p>
-
-        <span>17 · 04 · 2027</span>
+        <a className="confirmation-button rsvp-open-button" href="/confirmar" onClick={openRsvpPage}>CONFIRMAR ASISTENCIA</a>
+        <div className="confirmation-signoff">
+          <h2>¡Te esperamos!</h2>
+          <div className="couple-mark confirmation-logo" aria-label="Lucas y Coty, 17 de abril de 2027">
+            <h1 className="couple-monogram"><span>L</span><i aria-hidden="true"></i><span>C</span></h1>
+            <p className="couple-names"><span>LUCAS</span><span className="couple-amp">&amp;</span><span>COTY</span></p>
+            <p className="couple-date">17.04.27</p>
+          </div>
+        </div>
         {!easterEggDismissed && (
           <aside className="easter-popup" role="status" aria-live="polite">
             <span>tocame papi</span>
             <button type="button" aria-label="Cerrar easter egg" onClick={() => setEasterEggDismissed(true)}>×</button>
           </aside>
         )}
-      </footer>
+      </section>
 
     </main>
     </>
