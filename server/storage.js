@@ -5,11 +5,15 @@ import process from "node:process";
 import { Pool } from "pg";
 
 const databaseUrl = process.env.DATABASE_URL;
+const supabaseCaCertificate = process.env.SUPABASE_CA_CERT?.replace(/\\n/g, "\n");
 const sqlitePath = resolve(process.cwd(), "data", "invitacion.sqlite");
 const pool = databaseUrl
   ? new Pool({
       connectionString: databaseUrl,
-      ssl: { rejectUnauthorized: true },
+      ssl: {
+        ...(supabaseCaCertificate ? { ca: supabaseCaCertificate } : {}),
+        rejectUnauthorized: true,
+      },
       max: 4,
       connectionTimeoutMillis: 10_000,
     })
