@@ -1,22 +1,43 @@
-# React + Vite
+# Invitación Lucas & Coty
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+## Desarrollo local
 
-## Acceso al panel de invitados
+1. Copiá `.env.example` a `.env.local`.
+2. Configurá `ADMIN_PASSWORD` con la contraseña privada del panel.
+3. Ejecutá `npm install` y `npm run dev`.
 
-Para trabajar localmente, copiá `.env.example` como `.env.local` y configurá `ADMIN_PASSWORD` en ese archivo. `.env.local` está excluido de Git y no se debe subir al repositorio.
+Si no existe `DATABASE_URL`, la API local usa SQLite en `data/invitacion.sqlite`. Esa base local está excluida de Git.
 
-Al desplegar, configurá `ADMIN_PASSWORD` como variable secreta en la plataforma de hosting. No incluyas la contraseña en el código ni en las variables `VITE_*`, que se exponen al navegador. El panel usa sesiones temporales y su API requiere esa sesión para leer, crear, editar o eliminar respuestas.
+## Deploy: Vercel + Render + Supabase
 
-Currently, two official plugins are available:
+El frontend sigue en Vercel. Render ejecuta la API Node y Supabase conserva las confirmaciones en PostgreSQL. El archivo `api/[...path].js` hace de proxy para las rutas `/api/*`; así el navegador usa el mismo dominio de Vercel y la sesión del panel no depende de cookies de terceros.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+### 1. Supabase
 
-## React Compiler
+1. Creá un proyecto de base de datos en Supabase.
+2. En **Connect**, copiá la cadena **Session pooler** para un backend persistente y guardala para el siguiente paso. No la pongas en el código ni en Vercel.
+3. La API crea las tablas `rsvps` y `companions` al iniciar. También está el esquema equivalente en `server/schema.sql`.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+### 2. Render
 
-## Expanding the ESLint configuration
+El archivo `render.yaml` configura el servicio Node y su health check. En Render, creá un **Blueprint** desde este repositorio y la rama `main`; Render detectará el archivo y te pedirá estos valores al crear el servicio:
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+- `DATABASE_URL`: cadena Session pooler de Supabase.
+- `ADMIN_PASSWORD`: la contraseña privada del panel.
+- `FRONTEND_ORIGINS`: origen exacto de Vercel, por ejemplo `https://tu-proyecto.vercel.app`. Se pueden separar varios orígenes con comas.
+
+No agregues esos secretos al archivo `render.yaml`. Render solicita los valores `sync: false` desde el Dashboard durante la creación del Blueprint.
+
+Render entrega una URL del estilo `https://tu-api.onrender.com`.
+
+### 3. Vercel
+
+En **Project Settings → Environment Variables**, agregá `RENDER_API_URL` con la URL de Render, sin una barra al final, por ejemplo `https://tu-api.onrender.com`. No uses el prefijo `VITE_`: la llamada a Render se hace desde el proxy de Vercel.
+
+Volvé a desplegar Vercel. Las llamadas existentes a `/api/...` se enviarán a Render automáticamente.
+
+### Datos y sesiones
+
+La base Supabase comienza vacía. Los datos guardados en el SQLite local no se copian automáticamente; si hay respuestas reales que conservar, hay que migrarlas antes de abrir el formulario público.
+
+Las sesiones del panel duran 8 horas y viven en memoria del servidor. Un reinicio de Render las cierra, por lo que habrá que iniciar sesión otra vez. La base de datos sí permanece en Supabase entre reinicios y despliegues.

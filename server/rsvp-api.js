@@ -1,77 +1,13 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
-import { mkdirSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { DatabaseSync } from "node:sqlite";
-
-const databasePath = resolve(process.cwd(), "data", "invitacion.sqlite");
-let database;
-let insertRsvp;
-let insertCompanion;
-let updateRsvp;
-let deleteRsvp;
-let deleteCompanions;
-let listRsvps;
-let listCompanions;
+import { Buffer } from "node:buffer";
+import process from "node:process";
+import { createRsvp, deleteRsvp, initializeStorage, listRsvps, updateRsvp } from "./storage.js";
 const adminSessions = new Map();
 const loginAttempts = new Map();
 const adminSessionLifetimeMs = 8 * 60 * 60 * 1000;
 const maxLoginFailures = 5;
 const loginLockoutMs = 15 * 60 * 1000;
 const adminCookieName = "rsvp_admin_session";
-
-function initializeDatabase() {
-  if (database) return;
-  mkdirSync(dirname(databasePath), { recursive: true });
-  database = new DatabaseSync(databasePath);
-  database.exec(`
-    PRAGMA foreign_keys = ON;
-
-    CREATE TABLE IF NOT EXISTS rsvps (
-      id TEXT PRIMARY KEY,
-      guest_first_name TEXT NOT NULL,
-      guest_last_name TEXT NOT NULL,
-      attending INTEGER NOT NULL CHECK (attending IN (0, 1)),
-      dietary_notes TEXT,
-      submitted_at TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS companions (
-      id TEXT PRIMARY KEY,
-      rsvp_id TEXT NOT NULL REFERENCES rsvps(id) ON DELETE CASCADE,
-      position INTEGER NOT NULL CHECK (position IN (1, 2)),
-      first_name TEXT NOT NULL,
-      last_name TEXT NOT NULL,
-      dietary_notes TEXT,
-      UNIQUE (rsvp_id, position)
-    );
-
-    CREATE INDEX IF NOT EXISTS companions_rsvp_id_idx ON companions(rsvp_id);
-  `);
-
-  insertRsvp = database.prepare(`
-    INSERT INTO rsvps (id, guest_first_name, guest_last_name, attending, dietary_notes, submitted_at)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `);
-  insertCompanion = database.prepare(`
-    INSERT INTO companions (id, rsvp_id, position, first_name, last_name, dietary_notes)
-    VALUES (?, ?, ?, ?, ?, ?)
-  `);
-  updateRsvp = database.prepare(`
-    UPDATE rsvps
-    SET guest_first_name = ?, guest_last_name = ?, attending = ?, dietary_notes = ?, submitted_at = ?
-    WHERE id = ?
-  `);
-  deleteRsvp = database.prepare("DELETE FROM rsvps WHERE id = ?");
-  deleteCompanions = database.prepare("DELETE FROM companions WHERE rsvp_id = ?");
-  listRsvps = database.prepare(`
-    SELECT id, guest_first_name, guest_last_name, attending, dietary_notes, submitted_at
-    FROM rsvps ORDER BY submitted_at DESC
-  `);
-  listCompanions = database.prepare(`
-    SELECT id, rsvp_id, position, first_name, last_name, dietary_notes
-    FROM companions ORDER BY position ASC
-  `);
-}
 
 function sendJson(response, status, body) {
   response.writeHead(status, {
@@ -119,20 +55,6 @@ function setAdminCookie(request, response, sessionId) {
 function clearAdminCookie(request, response) {
   const secure = process.env.NODE_ENV === "production" || request.headers["x-forwarded-proto"] === "https";
   response.setHeader("Set-Cookie", `${adminCookieName}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${secure ? "; Secure" : ""}`);
-}
-
-function hasSameOrigin(request) {
-  const origin = request.headers.origin;
-  if (!origin || !request.headers.host) return false;
-  try {
-    return new URL(origin).host === request.headers.host;
-  } catch {
-    return false;
-  }
-}
-
-function getClientAddress(request) {
-  return request.socket.remoteAddress ?? "unknown";
 }
 
 function isLoginLocked(address) {
@@ -235,6 +157,30 @@ function validatePayload(payload) {
   };
 }
 
+const localOrigins = ["http://localhost:5173", "http://localhost:5174"];
+const allowedOrigins = new Set(
+  (process.env.FRONTEND_ORIGINS || localOrigins.join(","))
+    .split(",")
+    .map((origin) => origin.trim().replace(/\/$/, ""))
+    .filter(Boolean),
+);
+
+function isAllowedOrigin(request) {
+  const origin = request.headers.origin;
+  return typeof origin === "string" && allowedOrigins.has(origin.replace(/\/$/, ""));
+}
+
+function applyCors(request, response) {
+  const origin = request.headers.origin;
+  if (typeof origin !== "string" || !allowedOrigins.has(origin.replace(/\/$/, ""))) return false;
+  response.setHeader("Access-Control-Allow-Origin", origin);
+  response.setHeader("Access-Control-Allow-Credentials", "true");
+  response.setHeader("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
+  response.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  response.setHeader("Vary", "Origin");
+  return true;
+}
+
 export function rsvpApi() {
   return {
     name: "rsvp-api",
@@ -244,220 +190,166 @@ export function rsvpApi() {
 }
 
 function configureApi(server) {
-  initializeDatabase();
-  server.middlewares.use(async (request, response, next) => {
-        const pathname = new URL(request.url ?? "/", "http://localhost").pathname;
-        if (!pathname.startsWith("/api/")) return next();
-
-        if (pathname === "/api/health" && request.method === "GET") {
-          return sendJson(response, 200, { status: "ok" });
-        }
-
-        if (pathname === "/api/admin/session" && request.method === "GET") {
-          return sendJson(response, 200, { authenticated: hasAdminSession(request) });
-        }
-
-        if (pathname === "/api/admin/login" && request.method === "POST") {
-          if (!hasSameOrigin(request)) return sendJson(response, 403, { error: "Solicitud no válida." });
-          if (!process.env.ADMIN_PASSWORD) return sendJson(response, 503, { error: "El acceso al panel todavía no está configurado." });
-
-          const address = getClientAddress(request);
-          if (isLoginLocked(address)) return sendJson(response, 429, { error: "Demasiados intentos. Esperá 15 minutos y probá de nuevo." });
-
-          let payload;
-          try {
-            payload = await readJson(request, response);
-          } catch {
-            if (!response.headersSent) sendJson(response, 400, { error: "La solicitud no es válida." });
-            return;
-          }
-          if (response.headersSent) return;
-
-          if (!passwordMatches(payload?.password)) {
-            recordFailedLogin(address);
-            return sendJson(response, 401, { error: "La contraseña no es correcta." });
-          }
-
-          clearLoginFailures(address);
-          const sessionId = randomBytes(32).toString("base64url");
-          const expiresAt = Date.now() + adminSessionLifetimeMs;
-          for (const [existingId, session] of adminSessions) {
-            if (session.expiresAt <= Date.now()) adminSessions.delete(existingId);
-          }
-          adminSessions.set(sessionId, { expiresAt });
-          setAdminCookie(request, response, sessionId);
-          return sendJson(response, 200, { authenticated: true });
-        }
-
-        if (pathname === "/api/admin/logout" && request.method === "POST") {
-          if (!hasSameOrigin(request)) return sendJson(response, 403, { error: "Solicitud no válida." });
-          adminSessions.delete(getCookie(request, adminCookieName));
-          clearAdminCookie(request, response);
-          return sendJson(response, 200, { authenticated: false });
-        }
-
-        const adminRsvpMatch = pathname.match(/^\/api\/admin\/rsvps\/([^/]+)$/);
-        const isAdminRsvpCollection = pathname === "/api/admin/rsvps";
-        if (isAdminRsvpCollection || adminRsvpMatch) {
-          if (!hasAdminSession(request)) return sendJson(response, 401, { error: "Iniciá sesión para acceder al panel." });
-          if (request.method !== "GET" && !hasSameOrigin(request)) {
-            return sendJson(response, 403, { error: "Solicitud no válida." });
-          }
-        }
-
-        if (isAdminRsvpCollection && request.method === "GET") {
-          const companionsByRsvp = new Map();
-          for (const companion of listCompanions.all()) {
-            const items = companionsByRsvp.get(companion.rsvp_id) ?? [];
-            items.push({
-              id: companion.id,
-              position: companion.position,
-              firstName: companion.first_name,
-              lastName: companion.last_name,
-              dietaryNotes: companion.dietary_notes ?? "",
-            });
-            companionsByRsvp.set(companion.rsvp_id, items);
-          }
-
-          const rsvps = listRsvps.all().map((rsvp) => ({
-            id: rsvp.id,
-            guest: {
-              firstName: rsvp.guest_first_name,
-              lastName: rsvp.guest_last_name,
-              attending: Boolean(rsvp.attending),
-              dietaryNotes: rsvp.dietary_notes ?? "",
-            },
-            companions: companionsByRsvp.get(rsvp.id) ?? [],
-            submittedAt: rsvp.submitted_at,
-          }));
-          return sendJson(response, 200, { rsvps });
-        }
-
-        if (isAdminRsvpCollection && request.method === "POST") {
-          let payload;
-          try {
-            payload = await readJson(request, response);
-          } catch {
-            if (!response.headersSent) sendJson(response, 400, { error: "El formato de la respuesta no es válido." });
-            return;
-          }
-          if (response.headersSent) return;
-
-          const validated = validatePayload(payload);
-          if (typeof validated === "string") return sendJson(response, 400, { error: validated });
-          const rsvpId = randomUUID();
-          try {
-            database.exec("BEGIN IMMEDIATE");
-            insertRsvp.run(
-              rsvpId,
-              validated.guest.firstName,
-              validated.guest.lastName,
-              Number(validated.guest.attending),
-              validated.guest.dietaryNotes,
-              new Date().toISOString(),
-            );
-            validated.companions.forEach((companion, index) => {
-              insertCompanion.run(randomUUID(), rsvpId, index + 1, companion.firstName, companion.lastName, companion.dietaryNotes);
-            });
-            database.exec("COMMIT");
-            return sendJson(response, 201, { id: rsvpId, message: "Invitado agregado." });
-          } catch (error) {
-            database.exec("ROLLBACK");
-            console.error("No se pudo agregar el invitado:", error);
-            return sendJson(response, 500, { error: "No se pudo agregar el invitado." });
-          }
-        }
-
-        if (adminRsvpMatch && request.method === "DELETE") {
-          const result = deleteRsvp.run(decodeURIComponent(adminRsvpMatch[1]));
-          if (Number(result.changes) === 0) return sendJson(response, 404, { error: "No se encontró esa respuesta." });
-          return sendJson(response, 200, { message: "Respuesta eliminada." });
-        }
-
-        if (adminRsvpMatch && request.method === "PATCH") {
-          let payload;
-          try {
-            payload = await readJson(request, response);
-          } catch {
-            if (!response.headersSent) sendJson(response, 400, { error: "El formato de la respuesta no es válido." });
-            return;
-          }
-          if (response.headersSent) return;
-
-          const validated = validatePayload(payload);
-          if (typeof validated === "string") return sendJson(response, 400, { error: validated });
-
-          const rsvpId = decodeURIComponent(adminRsvpMatch[1]);
-          try {
-            database.exec("BEGIN IMMEDIATE");
-            const updated = updateRsvp.run(
-              validated.guest.firstName,
-              validated.guest.lastName,
-              Number(validated.guest.attending),
-              validated.guest.dietaryNotes,
-              new Date().toISOString(),
-              rsvpId,
-            );
-            if (Number(updated.changes) === 0) {
-              database.exec("ROLLBACK");
-              return sendJson(response, 404, { error: "No se encontró esa respuesta." });
-            }
-            deleteCompanions.run(rsvpId);
-            validated.companions.forEach((companion, index) => {
-              insertCompanion.run(randomUUID(), rsvpId, index + 1, companion.firstName, companion.lastName, companion.dietaryNotes);
-            });
-            database.exec("COMMIT");
-            return sendJson(response, 200, { message: "Respuesta actualizada." });
-          } catch (error) {
-            database.exec("ROLLBACK");
-            console.error("No se pudo actualizar la respuesta:", error);
-            return sendJson(response, 500, { error: "No se pudo actualizar la respuesta." });
-          }
-        }
-
-        if (isAdminRsvpCollection || adminRsvpMatch) {
-          response.setHeader("Allow", isAdminRsvpCollection ? "GET, POST" : "PATCH, DELETE");
-          return sendJson(response, 405, { error: "Método no permitido." });
-        }
-
-        if (pathname !== "/api/rsvps") return sendJson(response, 404, { error: "Ruta no encontrada." });
-        if (request.method !== "POST") {
-          response.setHeader("Allow", "POST");
-          return sendJson(response, 405, { error: "Método no permitido." });
-        }
-
-        let payload;
-        try {
-          payload = await readJson(request, response);
-        } catch (error) {
-          if (!response.headersSent) sendJson(response, 400, { error: "El formato de la respuesta no es válido." });
-          return;
-        }
-        if (response.headersSent) return;
-
-        const validated = validatePayload(payload);
-        if (typeof validated === "string") return sendJson(response, 400, { error: validated });
-
-        const rsvpId = randomUUID();
-        try {
-          database.exec("BEGIN IMMEDIATE");
-          insertRsvp.run(
-            rsvpId,
-            validated.guest.firstName,
-            validated.guest.lastName,
-            Number(validated.guest.attending),
-            validated.guest.dietaryNotes,
-            new Date().toISOString(),
-          );
-          validated.companions.forEach((companion, index) => {
-            insertCompanion.run(randomUUID(), rsvpId, index + 1, companion.firstName, companion.lastName, companion.dietaryNotes);
-          });
-          database.exec("COMMIT");
-          return sendJson(response, 201, { id: rsvpId, message: "Confirmación recibida." });
-        } catch (error) {
-          database.exec("ROLLBACK");
-          console.error("No se pudo guardar la confirmación:", error);
-          return sendJson(response, 500, { error: "No se pudo guardar la confirmación." });
-        }
+  server.middlewares.use((request, response, next) => {
+    handleApi(request, response).then((handled) => {
+      if (!handled) next();
+    }).catch((error) => {
+      console.error("No se pudo procesar la solicitud:", error);
+      if (!response.headersSent) sendJson(response, 500, { error: "Ocurrió un error interno." });
+    });
   });
+}
+
+export async function handleApi(request, response) {
+  const pathname = new URL(request.url ?? "/", "http://localhost").pathname;
+  if (!pathname.startsWith("/api/")) return false;
+
+  const originAllowed = applyCors(request, response);
+  if (request.method === "OPTIONS") {
+    if (!originAllowed) sendJson(response, 403, { error: "Origen no permitido." });
+    else response.writeHead(204, { "Cache-Control": "no-store" }).end();
+    return true;
+  }
+
+  try {
+    await initializeStorage();
+    if (pathname === "/api/health" && request.method === "GET") {
+      return sendJson(response, 200, { status: "ok" });
+    }
+
+    if (pathname === "/api/admin/session" && request.method === "GET") {
+      return sendJson(response, 200, { authenticated: hasAdminSession(request) });
+    }
+
+    if (pathname === "/api/admin/login" && request.method === "POST") {
+      if (!isAllowedOrigin(request)) return sendJson(response, 403, { error: "Solicitud no válida." });
+      if (!process.env.ADMIN_PASSWORD) return sendJson(response, 503, { error: "El acceso al panel todavía no está configurado." });
+      const address = getClientAddress(request);
+      if (isLoginLocked(address)) return sendJson(response, 429, { error: "Demasiados intentos. Esperá 15 minutos y probá de nuevo." });
+
+      let payload;
+      try {
+        payload = await readJson(request, response);
+      } catch {
+        if (!response.headersSent) sendJson(response, 400, { error: "La solicitud no es válida." });
+        return true;
+      }
+      if (response.headersSent) return true;
+      if (!passwordMatches(payload?.password)) {
+        recordFailedLogin(address);
+        return sendJson(response, 401, { error: "La contraseña no es correcta." });
+      }
+
+      clearLoginFailures(address);
+      const sessionId = randomBytes(32).toString("base64url");
+      const expiresAt = Date.now() + adminSessionLifetimeMs;
+      for (const [existingId, session] of adminSessions) {
+        if (session.expiresAt <= Date.now()) adminSessions.delete(existingId);
+      }
+      adminSessions.set(sessionId, { expiresAt });
+      setAdminCookie(request, response, sessionId);
+      return sendJson(response, 200, { authenticated: true });
+    }
+
+    if (pathname === "/api/admin/logout" && request.method === "POST") {
+      if (!isAllowedOrigin(request)) return sendJson(response, 403, { error: "Solicitud no válida." });
+      adminSessions.delete(getCookie(request, adminCookieName));
+      clearAdminCookie(request, response);
+      return sendJson(response, 200, { authenticated: false });
+    }
+
+    const adminRsvpMatch = pathname.match(/^\/api\/admin\/rsvps\/([^/]+)$/);
+    const isAdminRsvpCollection = pathname === "/api/admin/rsvps";
+    if (isAdminRsvpCollection || adminRsvpMatch) {
+      if (!hasAdminSession(request)) return sendJson(response, 401, { error: "Iniciá sesión para acceder al panel." });
+      if (request.method !== "GET" && !isAllowedOrigin(request)) {
+        return sendJson(response, 403, { error: "Solicitud no válida." });
+      }
+    }
+
+    if (isAdminRsvpCollection && request.method === "GET") {
+      return sendJson(response, 200, { rsvps: await listRsvps() });
+    }
+
+    if ((isAdminRsvpCollection && request.method === "POST") || pathname === "/api/rsvps") {
+      if (isAdminRsvpCollection && request.method !== "POST") {
+        response.setHeader("Allow", "GET, POST");
+        return sendJson(response, 405, { error: "Método no permitido." });
+      }
+      if (pathname === "/api/rsvps" && request.method !== "POST") {
+        response.setHeader("Allow", "POST");
+        return sendJson(response, 405, { error: "Método no permitido." });
+      }
+      if (pathname === "/api/rsvps" && !isAllowedOrigin(request)) {
+        return sendJson(response, 403, { error: "Origen no permitido." });
+      }
+      let payload;
+      try {
+        payload = await readJson(request, response);
+      } catch {
+        if (!response.headersSent) sendJson(response, 400, { error: "El formato de la respuesta no es válido." });
+        return true;
+      }
+      if (response.headersSent) return true;
+      const validated = validatePayload(payload);
+      if (typeof validated === "string") return sendJson(response, 400, { error: validated });
+
+      const rsvpId = randomUUID();
+      const companionIds = validated.companions.map(() => randomUUID());
+      try {
+        await createRsvp(rsvpId, validated, companionIds);
+        return sendJson(response, 201, {
+          id: rsvpId,
+          message: isAdminRsvpCollection ? "Invitado agregado." : "Confirmación recibida.",
+        });
+      } catch (error) {
+        console.error("No se pudo guardar la respuesta:", error);
+        return sendJson(response, 500, { error: "No se pudo guardar la respuesta." });
+      }
+    }
+
+    if (adminRsvpMatch && request.method === "DELETE") {
+      const id = decodeURIComponent(adminRsvpMatch[1]);
+      if (!await deleteRsvp(id)) return sendJson(response, 404, { error: "No se encontró esa respuesta." });
+      return sendJson(response, 200, { message: "Respuesta eliminada." });
+    }
+
+    if (adminRsvpMatch && request.method === "PATCH") {
+      let payload;
+      try {
+        payload = await readJson(request, response);
+      } catch {
+        if (!response.headersSent) sendJson(response, 400, { error: "El formato de la respuesta no es válido." });
+        return true;
+      }
+      if (response.headersSent) return true;
+      const validated = validatePayload(payload);
+      if (typeof validated === "string") return sendJson(response, 400, { error: validated });
+      const id = decodeURIComponent(adminRsvpMatch[1]);
+      const companionIds = validated.companions.map(() => randomUUID());
+      try {
+        if (!await updateRsvp(id, validated, companionIds)) {
+          return sendJson(response, 404, { error: "No se encontró esa respuesta." });
+        }
+        return sendJson(response, 200, { message: "Respuesta actualizada." });
+      } catch (error) {
+        console.error("No se pudo actualizar la respuesta:", error);
+        return sendJson(response, 500, { error: "No se pudo actualizar la respuesta." });
+      }
+    }
+
+    if (isAdminRsvpCollection || adminRsvpMatch) {
+      response.setHeader("Allow", isAdminRsvpCollection ? "GET, POST" : "PATCH, DELETE");
+      return sendJson(response, 405, { error: "Método no permitido." });
+    }
+    return sendJson(response, 404, { error: "Ruta no encontrada." });
+  } catch (error) {
+    console.error("Error de la API:", error);
+    return sendJson(response, 500, { error: "Ocurrió un error interno." });
+  }
+}
+
+function getClientAddress(request) {
+  const forwardedAddress = request.headers["x-forwarded-for"]?.split(",")[0]?.trim();
+  return forwardedAddress || request.socket.remoteAddress || "unknown";
 }
