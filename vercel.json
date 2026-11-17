@@ -3,6 +3,7 @@
   "rewrites": [
     { "source": "/admin", "destination": "/index.html" },
     { "source": "/confirmar", "destination": "/index.html" },
+    { "source": "/404", "destination": "/index.html" },
     {
       "source": "/api/:path*",
       "destination": "https://invitacioncotyluqi.onrender.com/api/:path*"

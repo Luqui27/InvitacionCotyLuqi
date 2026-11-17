@@ -97,6 +97,7 @@ function App() {
   const weddingDate = new Date("2027-04-17T20:00:00");
   const [showRsvpPage, setShowRsvpPage] = useState(() => window.location.pathname === "/confirmar");
   const [showAdminPage, setShowAdminPage] = useState(() => window.location.pathname === "/admin");
+  const [showEasterEggPage, setShowEasterEggPage] = useState(() => window.location.pathname === "/404");
 
   const [timeLeft, setTimeLeft] = useState({
     days: 0,
@@ -120,6 +121,7 @@ function App() {
       const path = window.location.pathname;
       setShowRsvpPage(path === "/confirmar");
       setShowAdminPage(path === "/admin");
+      setShowEasterEggPage(path === "/404");
       if (path === "/" && window.location.hash) {
         const sectionId = window.location.hash.slice(1);
         window.setTimeout(() => document.getElementById(sectionId)?.scrollIntoView({ block: "start" }), 0);
@@ -192,7 +194,7 @@ function App() {
   });
 
   return () => observer.disconnect();
-}, [showAdminPage, showRsvpPage]);
+}, [showAdminPage, showRsvpPage, showEasterEggPage]);
 
   const copyAlias = async () => {
     try {
@@ -229,11 +231,19 @@ function App() {
     window.scrollTo(0, 0);
   };
 
+  const openEasterEggPage = (event) => {
+    event.preventDefault();
+    window.history.pushState(null, "", "/404");
+    setShowEasterEggPage(true);
+    window.scrollTo(0, 0);
+  };
+
   const returnToInvitation = (event) => {
     event.preventDefault();
     window.history.pushState(null, "", "/#inicio");
     setShowRsvpPage(false);
     setShowAdminPage(false);
+    setShowEasterEggPage(false);
     window.setTimeout(() => document.getElementById("inicio")?.scrollIntoView({ block: "start" }), 0);
   };
 
@@ -403,6 +413,26 @@ function App() {
       )}
     </form>
   );
+
+  if (showEasterEggPage) {
+    return (
+      <main className="not-found-page">
+        <section className="not-found-card" aria-labelledby="not-found-title">
+          <p className="small-title">LUCAS &amp; COTY · PRÓXIMAMENTE</p>
+          <p className="not-found-code" aria-label="Error 404">404</p>
+          <h1 id="not-found-title">Este rincón está en construcción</h1>
+          <p className="not-found-copy">El easter egg completo llegará más adelante. Mientras tanto, un perrito baila para vos.</p>
+          <img
+            className="not-found-dog"
+            src="https://media.tenor.com/ugw8PESrI7sAAAAC/shiba-dog-jump.gif"
+            alt="Un perrito Shiba Inu bailando"
+          />
+          <a className="not-found-credit" href="https://tenor.com/view/shiba-dog-jump-dance-cute-dog-gif-15957050" target="_blank" rel="noopener noreferrer">GIF vía Tenor</a>
+          <a className="confirmation-button not-found-return" href="/#inicio" onClick={returnToInvitation}>VOLVER A LA INVITACIÓN</a>
+        </section>
+      </main>
+    );
+  }
 
   if (showAdminPage) return <AdminPage onReturn={returnToInvitation} />;
 
@@ -613,8 +643,8 @@ function App() {
           </div>
         </div>
         {!easterEggDismissed && (
-          <aside className="easter-popup" role="status" aria-live="polite">
-            <span>tocame papi</span>
+          <aside className="easter-popup">
+            <a href="/404" onClick={openEasterEggPage}>tocame papi</a>
             <button type="button" aria-label="Cerrar easter egg" onClick={() => setEasterEggDismissed(true)}>×</button>
           </aside>
         )}
