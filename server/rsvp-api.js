@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { Buffer } from "node:buffer";
 import process from "node:process";
-import { createRsvp, deleteRsvp, initializeStorage, listRsvps, updateRsvp } from "./storage.js";
+import { createPayment, createRsvp, deletePayment, deleteRsvp, initializeStorage, listRsvps, updateRsvp } from "./storage.js";
 const adminSessions = new Map();
 const loginAttempts = new Map();
 const adminSessionLifetimeMs = 8 * 60 * 60 * 1000;
@@ -92,6 +92,16 @@ function cleanText(value, { required = false, maxLength = 100 } = {}) {
   return cleaned;
 }
 
+function todayInArgentina() {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Argentina/Buenos_Aires",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date()).map(({ type, value }) => [type, value]));
+  return `${parts.year}-${parts.month}-${parts.day}`;
+}
+
 function readJson(request, response) {
   return new Promise((resolveBody, rejectBody) => {
     const chunks = [];
@@ -122,9 +132,10 @@ function readJson(request, response) {
   });
 }
 
-function validatePayload(payload) {
+function validatePayload(payload, { allowChargeOverrides = false } = {}) {
   const guest = payload?.guest;
   if (!guest || typeof guest.attending !== "boolean") return "Indicá si vas a asistir.";
+  if (allowChargeOverrides && guest.ticketChargeable !== undefined && typeof guest.ticketChargeable !== "boolean") return "Indicá si la tarjeta del invitado tiene cargo.";
 
   const guestFirstName = cleanText(guest.firstName, { required: true });
   const guestLastName = cleanText(guest.lastName, { required: true });
@@ -141,9 +152,10 @@ function validatePayload(payload) {
     const firstName = cleanText(companion?.firstName, { required: true });
     const lastName = cleanText(companion?.lastName, { required: true });
     const companionNotes = cleanText(companion?.dietaryNotes, { maxLength: 1500 });
+    if (allowChargeOverrides && companion?.ticketChargeable !== undefined && typeof companion.ticketChargeable !== "boolean") return "Indicá si la tarjeta de cada acompañante tiene cargo.";
     if (!firstName || !lastName) return "Completá el nombre y apellido de cada acompañante.";
     if (companionNotes === null) return "El comentario de cada acompañante no puede superar los 1500 caracteres.";
-    cleanCompanions.push({ firstName, lastName, dietaryNotes: companionNotes || null });
+    cleanCompanions.push({ firstName, lastName, ticketChargeable: !allowChargeOverrides || companion.ticketChargeable !== false, dietaryNotes: companionNotes || null });
   }
 
   return {
@@ -151,6 +163,7 @@ function validatePayload(payload) {
       firstName: guestFirstName,
       lastName: guestLastName,
       attending: guest.attending,
+      ticketChargeable: !allowChargeOverrides || guest.ticketChargeable !== false,
       dietaryNotes: dietaryNotes || null,
     },
     companions: cleanCompanions,
@@ -258,13 +271,60 @@ export async function handleApi(request, response) {
       return sendJson(response, 200, { authenticated: false });
     }
 
+    const adminPaymentMatch = pathname.match(/^\/api\/admin\/rsvps\/([^/]+)\/payments\/([^/]+)$/);
+    const adminPaymentCollectionMatch = pathname.match(/^\/api\/admin\/rsvps\/([^/]+)\/payments$/);
     const adminRsvpMatch = pathname.match(/^\/api\/admin\/rsvps\/([^/]+)$/);
     const isAdminRsvpCollection = pathname === "/api/admin/rsvps";
-    if (isAdminRsvpCollection || adminRsvpMatch) {
+    if (isAdminRsvpCollection || adminRsvpMatch || adminPaymentMatch || adminPaymentCollectionMatch) {
       if (!hasAdminSession(request)) return sendJson(response, 401, { error: "Iniciá sesión para acceder al panel." });
       if (request.method !== "GET" && !isAllowedOrigin(request)) {
         return sendJson(response, 403, { error: "Solicitud no válida." });
       }
+    }
+
+    if (adminPaymentCollectionMatch && request.method === "POST") {
+      let payload;
+      try {
+        payload = await readJson(request, response);
+      } catch {
+        if (!response.headersSent) sendJson(response, 400, { error: "El formato del pago no es válido." });
+        return true;
+      }
+      if (response.headersSent) return true;
+      const amountArs = payload?.amountArs;
+      const paidAt = payload?.paidAt;
+      const note = cleanText(payload?.note, { maxLength: 500 });
+      const validDate = typeof paidAt === "string" && /^\d{4}-\d{2}-\d{2}$/.test(paidAt)
+        && !Number.isNaN(Date.parse(`${paidAt}T00:00:00.000Z`))
+        && new Date(`${paidAt}T00:00:00.000Z`).toISOString().slice(0, 10) === paidAt;
+      if (!Number.isSafeInteger(amountArs) || amountArs < 1 || amountArs > 100_000_000) {
+        return sendJson(response, 400, { error: "Ingresá un monto válido en pesos (entre $1 y $100.000.000)." });
+      }
+      if (!validDate) return sendJson(response, 400, { error: "Ingresá una fecha de pago válida." });
+      if (paidAt > todayInArgentina()) return sendJson(response, 400, { error: "La fecha del pago no puede ser posterior a hoy." });
+      if (note === null) return sendJson(response, 400, { error: "La nota no puede superar los 500 caracteres." });
+      try {
+        const id = randomUUID();
+        if (!await createPayment(id, decodeURIComponent(adminPaymentCollectionMatch[1]), amountArs, paidAt, note)) {
+          return sendJson(response, 404, { error: "No se encontró ese invitado." });
+        }
+        return sendJson(response, 201, { id, message: "Pago registrado." });
+      } catch (error) {
+        console.error("No se pudo registrar el pago:", error);
+        return sendJson(response, 500, { error: "No se pudo registrar el pago." });
+      }
+    }
+
+    if (adminPaymentMatch && request.method === "DELETE") {
+      const rsvpId = decodeURIComponent(adminPaymentMatch[1]);
+      const paymentId = decodeURIComponent(adminPaymentMatch[2]);
+      if (!await deletePayment(rsvpId, paymentId)) return sendJson(response, 404, { error: "No se encontró ese pago." });
+      return sendJson(response, 200, { message: "Pago eliminado." });
+    }
+
+    if (adminPaymentMatch || adminPaymentCollectionMatch) {
+      response.setHeader("Allow", adminPaymentCollectionMatch ? "POST" : "DELETE");
+      return sendJson(response, 405, { error: "Método no permitido." });
     }
 
     if (isAdminRsvpCollection && request.method === "GET") {
@@ -291,7 +351,7 @@ export async function handleApi(request, response) {
         return true;
       }
       if (response.headersSent) return true;
-      const validated = validatePayload(payload);
+      const validated = validatePayload(payload, { allowChargeOverrides: isAdminRsvpCollection });
       if (typeof validated === "string") return sendJson(response, 400, { error: validated });
 
       const rsvpId = randomUUID();
@@ -323,7 +383,7 @@ export async function handleApi(request, response) {
         return true;
       }
       if (response.headersSent) return true;
-      const validated = validatePayload(payload);
+      const validated = validatePayload(payload, { allowChargeOverrides: true });
       if (typeof validated === "string") return sendJson(response, 400, { error: validated });
       const id = decodeURIComponent(adminRsvpMatch[1]);
       const companionIds = validated.companions.map(() => randomUUID());

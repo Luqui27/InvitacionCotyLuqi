@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import "./App.css";
 import AdminPage from "./AdminPage.jsx";
+import { TICKET_PRICE_ARS } from "./event-config.js";
 
 function BotanicalSprig({ className = "", src = "/florals/botanical-arrangement.png?v=3" }) {
   return (
@@ -25,6 +26,7 @@ function EventIcon({ type }) {
     calendar: <><rect x="3" y="5" width="18" height="16" rx="2" /><path d="M16 3v4M8 3v4M3 10h18M8 14h.01M12 14h.01M16 14h.01M8 17h.01M12 17h.01" /></>,
     pin: <><path d="M20 10c0 5-8 12-8 12S4 15 4 10a8 8 0 1 1 16 0Z" /><circle cx="12" cy="10" r="2.5" /></>,
     map: <><path d="m3 6 6-3 6 3 6-3v15l-6 3-6-3-6 3V6Z" /><path d="M9 3v15m6-12v15" /><path d="M12 8a2 2 0 1 0 4 0c0-1.1-.9-2-2-2s-2 .9-2 2Zm2 2 2 2" /></>,
+    attire: <><path d="M3 14.5 12 8l9 6.5-1.5 2.2L12 12l-7.5 4.7L3 14.5Z" /><path d="M12 8a2.2 2.2 0 1 0-2.2-2.2" /></>,
     gift: <><rect x="3" y="8" width="18" height="13" rx="1" /><path d="M12 8v13M2 12h20M12 8H7.5a2.5 2.5 0 1 1 2.5-2.5V8Zm0 0h4.5A2.5 2.5 0 1 0 14 5.5V8Z" /></>,
   };
   return <svg className="event-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[type]}</svg>;
@@ -190,7 +192,7 @@ function App() {
   });
 
   return () => observer.disconnect();
-}, []);
+}, [showAdminPage, showRsvpPage]);
 
   const copyAlias = async () => {
     try {
@@ -237,6 +239,11 @@ function App() {
 
   const submitRsvp = async (event) => {
     event.preventDefault();
+    const submissionStartedAt = Date.now();
+    const keepSendingVisible = async () => {
+      const remaining = 700 - (Date.now() - submissionStartedAt);
+      if (remaining > 0) await new Promise((resolve) => window.setTimeout(resolve, remaining));
+    };
     const form = event.currentTarget;
     const formData = new FormData(form);
     const attending = formData.get("attendance") === "yes";
@@ -274,6 +281,7 @@ function App() {
         }),
       });
       const result = await response.json();
+      await keepSendingVisible();
       if (!response.ok) throw new Error(result.error ?? "No se pudo guardar la confirmación.");
 
       form.reset();
@@ -282,6 +290,7 @@ function App() {
       setHasSecondCompanion("no");
       setSubmissionStatus({ type: "success", message: "¡Gracias! Tu confirmación quedó registrada." });
     } catch (error) {
+      await keepSendingVisible();
       setSubmissionStatus({ type: "error", message: "No se pudo enviar el formulario." });
     } finally {
       setIsSubmitting(false);
@@ -289,7 +298,7 @@ function App() {
   };
 
   const rsvpForm = (
-    <form className="rsvp-form" onSubmit={submitRsvp}>
+    <form className="rsvp-form" onSubmit={submitRsvp} aria-busy={isSubmitting}>
       <div className="rsvp-field">
         <label htmlFor="guest-name">Tu nombre</label>
         <input id="guest-name" name="guestName" type="text" autoComplete="given-name" placeholder="Nombre" required />
@@ -375,8 +384,14 @@ function App() {
       )}
 
       <button className="confirmation-button" type="submit" disabled={isSubmitting}>
+        {isSubmitting && <span className="rsvp-spinner" aria-hidden="true" />}
         {isSubmitting ? "ENVIANDO…" : "CONFIRMAR ASISTENCIA"}
       </button>
+      {isSubmitting && (
+        <p className="rsvp-submitting-message" role="status" aria-live="polite">
+          Estamos enviando tu confirmación…<br />Puede demorar un poquito. Mantené esta página abierta, por favor.
+        </p>
+      )}
       {submissionStatus.type === "error" && (
         <div className="rsvp-feedback error" role="alert" aria-live="assertive">
           <h2>No se pudo enviar</h2>
@@ -489,6 +504,13 @@ function App() {
             <MapChooser />
           </div>
 
+          <div className="event-item event-item-four">
+            <EventIcon type="attire" />
+            <h3>Código de vestimenta</h3>
+            <p>Elegante</p>
+            <small>Ella: blanco<br />Él: verde oliva</small>
+          </div>
+
         </div>
 
         <section className="countdown-section" aria-label="Cuenta regresiva">
@@ -533,8 +555,8 @@ function App() {
           el valor de la tarjeta es de:
         </p>
 
-        <p className="ticket-price" aria-label="70.000 pesos por persona">
-          <span className="peso-sign" aria-hidden="true">S<i /></span>70.000
+        <p className="ticket-price" aria-label={`${TICKET_PRICE_ARS.toLocaleString("es-AR")} pesos por persona`}>
+          <span className="peso-sign" aria-hidden="true">S<i /></span>{TICKET_PRICE_ARS.toLocaleString("es-AR")}
           <span>por persona</span>
         </p>
 
