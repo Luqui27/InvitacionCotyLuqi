@@ -59,6 +59,9 @@ async function initializePostgres() {
       note TEXT NOT NULL DEFAULT ''
     );
     CREATE INDEX IF NOT EXISTS payments_rsvp_id_idx ON payments(rsvp_id);
+    ALTER TABLE public.rsvps ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE public.companions ENABLE ROW LEVEL SECURITY;
+    ALTER TABLE public.payments ENABLE ROW LEVEL SECURITY;
   `);
 }
 
