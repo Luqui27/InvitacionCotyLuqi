@@ -1,45 +1,112 @@
-# Invitación Lucas & Coty
+# Invitación de boda · Lucas & Coty
 
-## Desarrollo local
+Invitación digital para una boda, con diseño editorial inspirado en papelería botánica. El proyecto combina una experiencia pública para los invitados con un panel privado para administrar confirmaciones y pagos.
 
-1. Copiá `.env.example` a `.env.local`.
-2. Configurá `ADMIN_PASSWORD` con la contraseña privada del panel.
-3. Ejecutá `npm install` y `npm run dev`.
+**Ver invitación:** [invitacion-coty-luqi.vercel.app](https://invitacion-coty-luqi.vercel.app)
 
-Si no existe `DATABASE_URL`, la API local usa SQLite en `data/invitacion.sqlite`. Esa base local está excluida de Git.
+## Funcionalidades
 
-## Deploy: Vercel + Render + Supabase
+- Diseño adaptable a celular y escritorio, con navegación por secciones.
+- Detalles del evento, ubicación con opciones de Google Maps y Apple Maps, código de vestimenta y cuenta regresiva.
+- Formulario de asistencia con hasta dos acompañantes y comentarios sobre alergias o necesidades alimentarias.
+- Página de confirmación con mensajes de éxito, error y estado de envío.
+- Panel privado para buscar y filtrar respuestas, administrar invitados y acompañantes, y registrar pagos parciales o completos.
+- Resumen de asistentes y recaudación, contemplando invitaciones sin cargo.
+- Validación de datos en el servidor y Row Level Security (RLS) habilitado en las tablas de Supabase.
 
-El frontend sigue en Vercel. Render ejecuta la API Node y Supabase conserva las confirmaciones en PostgreSQL. El `vercel.json` reescribe las rutas `/api/*` hacia Render sin cambiar el dominio visible para el navegador, así la sesión del panel sigue siendo first-party.
+## Tecnologías
 
-### 1. Supabase
+| Área | Tecnología |
+| --- | --- |
+| Interfaz | React, Vite, JavaScript y CSS |
+| API | Node.js y HTTP |
+| Persistencia local | SQLite |
+| Base de datos publicada | PostgreSQL en Supabase |
+| Hosting del frontend | Vercel |
+| Hosting de la API | Render |
 
-En **Connect**, copiá la URI de **Session pooler** para `DATABASE_URL`. En **Database Settings → SSL Configuration**, descargá el certificado raíz para configurarlo en Render como `SUPABASE_CA_CERT`. La API crea las tablas `rsvps` y `companions` al iniciar; el esquema también está en `server/schema.sql`.
+## Arquitectura
 
-### 2. Render
+```mermaid
+flowchart LR
+    Invitado[Invitados y organizadores] --> Frontend[React · Vercel]
+    Frontend -->|/api/*| Backend[Node.js · Render]
+    Backend --> Database[(PostgreSQL · Supabase)]
+    Dev[Desarrollo local] --> LocalApp[Vite + API local]
+    LocalApp --> LocalDB[(SQLite)]
+```
 
-Creá un **Web Service** conectado a este repositorio y la rama `main`:
+En producción, Vercel reenvía las rutas `/api/*` a Render. El backend valida los datos y administra el acceso al panel; las confirmaciones, acompañantes y pagos se guardan en Supabase. En desarrollo local, la API integrada con Vite usa SQLite si no se configura `DATABASE_URL`.
 
-- Runtime: Node
-- Build command: `npm ci`
-- Start command: `npm start`
-- Health check path: `/api/health`
+## Ejecutar localmente
 
-Configurá estas variables en el Web Service:
+Requisitos: Node.js 24 o posterior y npm.
 
-- `DATABASE_URL`: URI Session pooler de Supabase.
-- `SUPABASE_CA_CERT`: certificado raíz completo, incluyendo `BEGIN CERTIFICATE` y `END CERTIFICATE`, para validar la conexión TLS.
-- `ADMIN_PASSWORD`: la contraseña privada del panel.
-- `FRONTEND_ORIGINS`: origen exacto de Vercel, por ejemplo `https://tu-proyecto.vercel.app`. Se pueden separar varios orígenes con comas.
+1. Cloná el repositorio e instalá las dependencias:
 
-Render entrega una URL del estilo `https://tu-api.onrender.com`.
+   ```bash
+   git clone https://github.com/Luqui27/InvitacionCotyLuqi.git
+   cd InvitacionCotyLuqi
+   npm ci
+   ```
 
-### 3. Vercel
+2. Creá `.env.local` a partir del archivo de ejemplo:
 
-Las rutas de API se envían a la URL pública del servicio Render desde `vercel.json`. Las rutas `/admin` y `/confirmar` se reescriben a `index.html` para que Vite cargue la SPA cuando se abren directamente.
+   **PowerShell**
 
-### Datos y sesiones
+   ```powershell
+   Copy-Item .env.example .env.local
+   ```
 
-La base Supabase comienza vacía. Los datos guardados en el SQLite local no se copian automáticamente; si hay respuestas reales que conservar, hay que migrarlas antes de abrir el formulario público.
+   **macOS / Linux**
 
-Las sesiones del panel duran 8 horas y viven en memoria del servidor. Un reinicio de Render las cierra, por lo que habrá que iniciar sesión otra vez. La base de datos sí permanece en Supabase entre reinicios y despliegues.
+   ```bash
+   cp .env.example .env.local
+   ```
+
+3. Definí `ADMIN_PASSWORD` en `.env.local`. Para trabajar localmente podés dejar `DATABASE_URL` vacío; se creará una base SQLite local en `data/invitacion.sqlite`.
+
+4. Iniciá la aplicación:
+
+   ```bash
+   npm run dev
+   ```
+
+   Abrí la dirección local que muestra Vite. El panel de administración está disponible en `/admin`.
+
+## Despliegue
+
+La configuración del proyecto está preparada para Vercel, Render y Supabase:
+
+- **Vercel:** publica la aplicación React y reescribe `/api/*` hacia Render. La configuración de rutas está en [`vercel.json`](vercel.json).
+- **Render:** ejecuta la API con `npm start`. Configurá `npm ci` como comando de compilación y `/api/health` como ruta de verificación.
+- **Supabase:** aloja PostgreSQL. El backend crea y actualiza el esquema al iniciar; la definición está en [`server/schema.sql`](server/schema.sql).
+
+Variables privadas requeridas en Render:
+
+| Variable | Uso |
+| --- | --- |
+| `ADMIN_PASSWORD` | Contraseña del panel privado |
+| `DATABASE_URL` | URI de conexión PostgreSQL de Supabase |
+| `SUPABASE_CA_CERT` | Certificado raíz para validar la conexión TLS |
+| `FRONTEND_ORIGINS` | Origen u orígenes permitidos del frontend, separados por comas |
+
+No subas `.env.local`, contraseñas, cadenas de conexión ni certificados privados al repositorio. Los valores locales y de producción se configuran fuera de Git.
+
+## Estructura del proyecto
+
+```text
+src/             Interfaz, estilos y panel de administración
+server/          API, validación, autenticación y persistencia
+public/florals/  Recursos visuales de la invitación
+vercel.json      Reescrituras para la SPA y la API
+```
+
+## Comandos útiles
+
+```bash
+npm run dev      # aplicación local
+npm run build    # compilación de producción
+npm run preview  # vista previa de la compilación
+npm run lint     # análisis estático del código
+```

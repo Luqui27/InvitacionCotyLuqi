@@ -197,10 +197,10 @@ function App() {
   const copyAlias = async () => {
     try {
       if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText("BODA.LC");
+        await navigator.clipboard.writeText("BODA.LUQI.COTY");
       } else {
         const temporaryField = document.createElement("textarea");
-        temporaryField.value = "BODA.LC";
+        temporaryField.value = "BODA.LUQI.COTY";
         temporaryField.style.position = "fixed";
         temporaryField.style.opacity = "0";
         document.body.appendChild(temporaryField);
@@ -563,7 +563,7 @@ function App() {
         <div className="alias-box">
           <span>ALIAS</span>
 
-          <strong>BODA.LC</strong>
+          <strong>BODA.LUQI.COTY</strong>
           <p className="alias-owner">Cuenta a nombre de Lucas Gonzalo D’Mayo · Naranja X</p>
 
           <button type="button" onClick={copyAlias}>
